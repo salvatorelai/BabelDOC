@@ -1268,7 +1268,7 @@ class PDFCreater:
                 SUBSET_FONT_STAGE_NAME,
                 1,
             ) as pbar:
-                if not translation_config.skip_clean:
+                if False and not translation_config.skip_clean:
                     pdf = self.subset_fonts_in_subprocess(
                         pdf, translation_config, tag="mono"
                     )

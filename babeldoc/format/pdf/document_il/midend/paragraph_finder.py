@@ -843,6 +843,9 @@ class ParagraphFinder:
         paragraphs: list[PdfParagraph],
         median_width: float,
     ):
+        """
+        Process paragraphs to split independent lines.
+        """
         i = 0
         while i < len(paragraphs):
             paragraph = paragraphs[i]
@@ -861,45 +864,35 @@ class ParagraphFinder:
                 prev_width = prev_line.box.x2 - prev_line.box.x
                 prev_text = "".join([c.char_unicode for c in prev_line.pdf_character])
 
-                # 检查是否包含连续的点（至少 20 个）
-                # 如果有至少连续 20 个点，则代表这是目录条目
-                if re.search(r"\.{20,}", prev_text):
-                    # 创建新的段落
-                    new_paragraph = PdfParagraph(
-                        box=Box(0, 0, 0, 0),  # 临时边界框
-                        pdf_paragraph_composition=(
-                            paragraph.pdf_paragraph_composition[j:]
-                        ),
-                        unicode="",
-                        debug_id=generate_base58_id(),
-                        layout_label=paragraph.layout_label,
-                        layout_id=paragraph.layout_id,
-                    )
-                    # 更新原段落
-                    paragraph.pdf_paragraph_composition = (
-                        paragraph.pdf_paragraph_composition[:j]
-                    )
+                # Check if previous line is a TOC entry
+                is_prev_toc = False
+                if re.search(r"(\.{3,}\s*\d+|\s{2,}\d+|\s{2,}[ivxIVX]+)\s*$", prev_text):
+                    is_prev_toc = True
 
-                    # 更新两个段落的数据
-                    self.update_paragraph_data(paragraph)
-                    self.update_paragraph_data(new_paragraph)
-
-                    # 在原段落后插入新段落
-                    paragraphs.insert(i + 1, new_paragraph)
-                    break
-
-                # 如果前一行宽度小于中位数的一半，将当前行及后续行分割成新段落
+                # Current line checks
+                is_curr_split_point = False
                 if (
-                    self.translation_config.split_short_lines
-                    and prev_width
-                    < median_width * self.translation_config.short_line_split_factor
-                ) or (
                     paragraph.pdf_paragraph_composition
                     and (current_line := paragraph.pdf_paragraph_composition[j])
                     and (line := current_line.pdf_line)
                     and (chars := line.pdf_character)
-                    and (char := chars[0])
-                    and is_bullet_point(char)
+                ):
+                    line_text = "".join(c.char_unicode for c in chars[:15])
+                    if (
+                        ((char := chars[0]) and is_bullet_point(char))
+                        or re.match(r"^\s*(?:[a-zA-Z0-9]{1,3}[.)]|[ivxIVX]{1,5}\.)", line_text)
+                        or re.match(r"^\s*\d+(\.\d+)+\s", line_text)
+                    ):
+                        is_curr_split_point = True
+
+                if (
+                    is_prev_toc
+                    or (
+                        self.translation_config.split_short_lines
+                        and prev_width
+                        < median_width * self.translation_config.short_line_split_factor
+                    )
+                    or is_curr_split_point
                 ):
                     # 创建新的段落
                     new_paragraph = PdfParagraph(

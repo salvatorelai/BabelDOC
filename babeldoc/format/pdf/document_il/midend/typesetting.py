@@ -1304,6 +1304,7 @@ class Typesetting:
         font_sizes.sort()
         font_size = statistics.mode(font_sizes)
 
+
         space_width = (
             self.font_mapper.base_font.char_lengths("你", font_size * scale)[0] * 0.5
         )
@@ -1327,6 +1328,16 @@ class Typesetting:
         current_x = box.x
         current_y = box.y2 - avg_height
         box = copy.deepcopy(box)
+
+        # 修复列表项因为原文字数少导致边框过窄，进而导致翻译后字号缩小的问题
+        # 如果是列表项（a) 1. 等），且宽度较窄，则尝试扩展宽度
+        paragraph_text = "".join([u.try_get_unicode() or "" for u in typesetting_units[:20]])
+        if re.match(r"^\s*(?:[a-zA-Z0-9]{1,3}[.)]|[ivxIVX]{1,5}\.)", paragraph_text):
+            current_width = box.x2 - box.x
+            # 如果宽度小于 200pt (约 7cm)，且看起来是列表项，扩展它
+            if current_width < 200:
+                box.x2 += 150  # 扩展 150pt
+
         # box.y -= avg_height * (line_spacing - 1.01) # line_spacing 已被替换为 line_skip
         line_height = 0
         current_line_heights = []  # 存储当前行所有元素的高度
