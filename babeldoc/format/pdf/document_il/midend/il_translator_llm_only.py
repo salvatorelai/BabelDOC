@@ -95,6 +95,138 @@ $json_input_str"""
 )
 
 
+def is_code_block(
+    paragraph: PdfParagraph,
+    page_font_map: dict[str, PdfFont],
+    xobj_font_map: dict[int, dict[str, PdfFont]],
+) -> bool:
+    # Check layout label first
+    if paragraph.layout_label and "code" in paragraph.layout_label.lower():
+        with open("debug_log.txt", "a") as f:
+            f.write(f"Skipping code block (layout_label): {paragraph.layout_label}\n")
+        return True
+
+    # Check fonts
+    total_chars = 0
+    mono_chars = 0
+    
+    font_names = set()
+
+    # Helper to traverse composition
+    def traverse(composition):
+        chars = []
+        if composition.pdf_line:
+            chars.extend(composition.pdf_line.pdf_character)
+        elif composition.pdf_same_style_characters:
+            chars.extend(composition.pdf_same_style_characters.pdf_character)
+        elif composition.pdf_character:
+            chars.append(composition.pdf_character)
+        return chars
+
+    for comp in paragraph.pdf_paragraph_composition:
+        chars = traverse(comp)
+        for char in chars:
+            if not char.pdf_style or not char.pdf_style.font_id:
+                continue
+
+            font_id = char.pdf_style.font_id
+            font = None
+
+            # Font lookup priority:
+            # 1. char.xobj_id in xobj_font_map
+            # 2. paragraph.xobj_id in xobj_font_map
+            # 3. page_font_map
+
+            if (
+                char.xobj_id is not None
+                and xobj_font_map
+                and char.xobj_id in xobj_font_map
+            ):
+                font = xobj_font_map[char.xobj_id].get(font_id)
+            elif (
+                paragraph.xobj_id is not None
+                and xobj_font_map
+                and paragraph.xobj_id in xobj_font_map
+            ):
+                font = xobj_font_map[paragraph.xobj_id].get(font_id)
+            elif page_font_map:
+                font = page_font_map.get(font_id)
+
+            if font:
+                total_chars += 1
+                if font.name:
+                    font_names.add(f"{font.name}(mono={font.monospace})")
+                
+                is_mono = False
+                if font.monospace:
+                    is_mono = True
+                elif font.name:
+                    lower_name = font.name.lower()
+                    if any(
+                        x in lower_name
+                        for x in [
+                            "courier",
+                            "mono",
+                            "consolas",
+                            "typewriter",
+                            "code",
+                            "fira",
+                            "hack",
+                            "ubuntu mono",
+                            "droid sans mono",
+                            "inconsolata",
+                            "menlo",
+                            "monaco",
+                            "source code pro",
+                        ]
+                    ):
+                        is_mono = True
+
+                if is_mono:
+                    mono_chars += 1
+
+    ratio = mono_chars / total_chars if total_chars > 0 else 0
+    
+    if ratio > 0.8:
+        # print(f"Skipping code block (ratio={ratio:.2f}): {paragraph.unicode[:50]}...")
+        # logger.warning(f"Skipping code block (ratio={ratio:.2f}): {paragraph.unicode[:50]}...")
+        return True
+
+    # Check content for code patterns
+    text = paragraph.unicode.strip()
+    if not text:
+        return False
+        
+    # Python/General code patterns
+    code_patterns = [
+        r"^def\s+\w+\s*\(.*\):",          # Function def
+        r"^class\s+\w+(\(.*\))?:",        # Class def
+        r"^import\s+[\w.]+",              # Import
+        r"^from\s+[\w.]+\s+import\s+",    # From import
+        r"^return\s+.*",                  # Return statement
+        r"^for\s+\w+\s+in\s+",            # For loop
+        r"^if\s+.*:$",                    # If statement
+        r"^while\s+.*:$",                 # While loop
+        r"^try:$",                        # Try
+        r"^except\s*.*:$",                # Except
+        r"^else:$",                       # Else
+        r"^elif\s+.*:$",                  # Elif
+        r"^#.*",                          # Comment
+        r".*=\s*open\(.*\)",              # open() call
+        r".*\.append\(.*\)",              # list.append()
+        r".*\.close\(\)",                 # file.close()
+        r".*\.join\(.*\)",                # string.join()
+        r".*\s*=\s*\[\]$",                # list init: x = []
+    ]
+    
+    for pattern in code_patterns:
+        if re.match(pattern, text):
+            print(f"Skipping code block (pattern match): {text[:50]}...")
+            return True
+
+    return False
+
+
 class BatchParagraph:
     def __init__(
         self,
@@ -533,6 +665,9 @@ class ILTranslatorLLMOnly:
         translated_ids: set | None = None,
     ):
         self.translation_config.raise_if_cancelled()
+        if page.page_number is not None:
+            logger.info(f"Processing page {page.page_number}")
+        
         page_font_map = {}
         for font in page.pdf_font:
             page_font_map[font.font_id] = font
@@ -572,6 +707,11 @@ class ILTranslatorLLMOnly:
                 continue
 
             if is_placeholder_only_paragraph(paragraph):
+                if pbar:
+                    pbar.advance(1)
+                continue
+
+            if is_code_block(paragraph, page_font_map, page_xobj_font_map):
                 if pbar:
                     pbar.advance(1)
                 continue

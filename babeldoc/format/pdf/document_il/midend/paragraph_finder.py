@@ -420,6 +420,25 @@ class ParagraphFinder:
     def _group_characters_into_paragraphs(
         self, page: Page, layout_index, layout_map
     ) -> list[PdfParagraph]:
+        """
+        Group characters into paragraphs based on spatial proximity and layout information.
+        """
+        # Collect potential bullet graphics (small curves/rects/figures)
+        bullet_candidates = []
+        
+        def is_small_box(box):
+            return box and (box.x2 - box.x) < 20 and (box.y2 - box.y) < 20
+
+        for curve in page.pdf_curve:
+             if is_small_box(curve.box):
+                 bullet_candidates.append(curve.box)
+        for rect in page.pdf_rectangle:
+             if is_small_box(rect.box):
+                 bullet_candidates.append(rect.box)
+        for fig in page.pdf_figure:
+             if is_small_box(fig.box):
+                 bullet_candidates.append(fig.box)
+
         paragraphs: list[PdfParagraph] = []
         if page.pdf_paragraph:
             paragraphs.extend(page.pdf_paragraph)
@@ -443,6 +462,7 @@ class ParagraphFinder:
         current_paragraph: PdfParagraph | None = None
         current_layout: Layout | None = None
         skip_chars = []
+        prev_char_box = None
 
         for char in page.pdf_character:
             char_layout = get_character_layout(char, layout_index, layout_map)
@@ -461,6 +481,37 @@ class ParagraphFinder:
             #     char_box = char_pdf_box
             char_area = (char_box.x2 - char_box.x) * (char_box.y2 - char_box.y)
             is_small_char = char_area < median_char_area * 0.05
+
+            is_bullet = is_bullet_point(char)
+            # if is_bullet:
+            #     logger.info(f"DEBUG: Found bullet point char: {char.char_unicode} (U+{ord(char.char_unicode) if char.char_unicode else 0})")
+
+            # Check for implicit new line (vertical gap) + bullet graphic
+            has_bullet_graphic = False
+            is_implicit_newline = False
+            
+            if prev_char_box:
+                 # Check vertical difference. 
+                 # Assuming reading order (Top-Down or similar flow).
+                 # We check if they overlap vertically.
+                 # y_overlap = max(0, min(y2, py2) - max(y, py))
+                 y_overlap = max(0, min(char_box.y2, prev_char_box.y2) - max(char_box.y, prev_char_box.y))
+                 char_height = char_box.y2 - char_box.y
+                 # If overlap is small (< 50% of height), likely a new line
+                 if y_overlap < 0.5 * char_height:
+                     is_implicit_newline = True
+                     # logger.info(f"DEBUG: Implicit newline at {char.char_unicode} ({char_box}) vs prev ({prev_char_box})")
+            
+            if is_implicit_newline or current_paragraph is None:
+                for b in bullet_candidates:
+                    # Bullet should be to the left of char
+                    if b.x2 < char_box.x and (char_box.x - b.x2) < 50: # Within 50 units
+                        # Vertical overlap with line
+                        b_center_y = (b.y + b.y2) / 2
+                        if char_box.y <= b_center_y <= char_box.y2:
+                            has_bullet_graphic = True
+                            # logger.info(f"DEBUG: Found graphic bullet at {b} for char {char.char_unicode}")
+                            break
 
             is_new_paragraph = False
             if current_paragraph is None:
@@ -485,11 +536,13 @@ class ParagraphFinder:
                         ].pdf_character.xobj_id
                         != char.xobj_id
                     )
-                    or (
-                        is_bullet_point(char)
-                        and not current_paragraph.pdf_paragraph_composition
-                    )
+                    or is_bullet
+                    or has_bullet_graphic
                 ):
+                    # if is_bullet:
+                    #     logger.info("DEBUG: Triggering new paragraph due to bullet point")
+                    # if has_bullet_graphic:
+                    #     logger.info("DEBUG: Triggering new paragraph due to graphic bullet")
                     is_new_paragraph = True
 
             if is_new_paragraph:
@@ -505,6 +558,7 @@ class ParagraphFinder:
             current_paragraph.pdf_paragraph_composition.append(
                 PdfParagraphComposition(pdf_character=char)
             )
+            prev_char_box = char_box
 
         page.pdf_character = skip_chars
         for para in paragraphs:

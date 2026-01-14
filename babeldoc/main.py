@@ -12,6 +12,7 @@ import tqdm
 from rich.progress import BarColumn
 from rich.progress import MofNCompleteColumn
 from rich.progress import Progress
+from rich.progress import TaskProgressColumn
 from rich.progress import TextColumn
 from rich.progress import TimeElapsedColumn
 from rich.progress import TimeRemainingColumn
@@ -26,7 +27,7 @@ from babeldoc.translator.translator import OpenAITranslator
 from babeldoc.translator.translator import set_translate_rate_limiter
 
 logger = logging.getLogger(__name__)
-__version__ = "0.5.22"
+__version__ = "0.5.23"
 
 
 def create_parser():
@@ -800,6 +801,7 @@ def create_progress_handler(
         progress = Progress(
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
+            TaskProgressColumn(),
             MofNCompleteColumn(),
             TimeElapsedColumn(),
             TimeRemainingColumn(),
